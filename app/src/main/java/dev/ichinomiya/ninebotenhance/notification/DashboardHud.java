@@ -17,6 +17,7 @@ import dev.ichinomiya.ninebotenhance.core.HillHoldDetector;
 import dev.ichinomiya.ninebotenhance.core.DashboardProfile;
 import dev.ichinomiya.ninebotenhance.core.WidgetSettings;
 import dev.ichinomiya.ninebotenhance.core.HudPalette;
+import dev.ichinomiya.ninebotenhance.core.PowerFormat;
 import dev.ichinomiya.ninebotenhance.core.LampState;
 import dev.ichinomiya.ninebotenhance.core.BmsCard;
 import dev.ichinomiya.ninebotenhance.core.BmsSettings;
@@ -111,6 +112,14 @@ public final class DashboardHud {
     /** Debug register table; null or empty hides it. Equal snapshots do not re-encode. */
     public synchronized void acceptProbe(List<RegisterProbe.Row> rows){if(!Objects.equals(probeRows,rows)){probeRows=rows;revision++;}}
     private boolean probeShown(){return probeRows!=null&&!probeRows.isEmpty()&&widgets.enabled(WidgetSettings.REGISTER_PROBE);}
+    /** Wall clock of the paired phone card's time; tests pin it. */
+    public synchronized void setWallClock(java.util.function.LongSupplier value){wall=value;clockMinute=Long.MIN_VALUE;revision++;}
+    private java.util.function.LongSupplier wall=System::currentTimeMillis;private long clockMinute=Long.MIN_VALUE;private String clockText="";
+    private String clockText(){
+        long at=wall.getAsLong(),minute=Math.floorDiv(at,60000L);
+        if(minute!=clockMinute){java.time.ZonedDateTime t=java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault());clockText=String.format(Locale.ROOT,"%02d:%02d",t.getHour(),t.getMinute());clockMinute=minute;}
+        return clockText;
+    }
     public synchronized void setDark(boolean dark){if(p.dark()==dark)return;p=HudPalette.of(dark);timeline.clear();revision++;}
     public boolean dark(){return p.dark();}
     public synchronized void setWidgets(WidgetSettings value){if(!widgets.equals(value)){widgets=value;if(!widgets.enabled(WidgetSettings.NOTIFICATIONS)){timeline.clear();receiving=false;}revision++;}}
@@ -169,13 +178,13 @@ public final class DashboardHud {
         }revision++;}
         sync(now);
     }
-    /** Fixture for the device smoke tests: one synthetic card with the configured width, independent of the phone mailbox and its switches. No UI reaches it. */
+    /** Fixture for the device smoke tests and the 测试渲染 dialog: one synthetic card at the default width, independent of the phone mailbox and its switches. */
     public synchronized void simulate(long now){
         Bundle e=new Bundle();e.putString("app","Ninebot Enhance");e.putString("title","模拟通知 "+(++simulated));e.putString("text","用于预览通知的位置、宽度和字号");
         int duration=simulatedDuration;timeline.add("simulated-"+simulated,new Card(card(e)),duration,now);
         simulatedUntil=Math.max(simulatedUntil,now+duration+NotificationTimeline.EXIT_MS);revision++;
     }
-    private static boolean samePhone(Bundle a,Bundle b){if(a==null||b==null)return a==b;return a.getInt("battery",-1)==b.getInt("battery",-1)&&a.getBoolean("charging")==b.getBoolean("charging")&&a.getBoolean("wifi")==b.getBoolean("wifi")&&a.getBoolean("phone_permission")==b.getBoolean("phone_permission")&&Objects.equals(a.getIntegerArrayList("slots"),b.getIntegerArrayList("slots"))&&Objects.equals(a.getIntegerArrayList("levels"),b.getIntegerArrayList("levels"))&&Objects.equals(a.getString("network",""),b.getString("network",""));}
+    private static boolean samePhone(Bundle a,Bundle b){if(a==null||b==null)return a==b;return a.getInt("battery",-1)==b.getInt("battery",-1)&&a.getBoolean("charging")==b.getBoolean("charging")&&a.getBoolean("wifi")==b.getBoolean("wifi")&&a.getBoolean("phone_permission")==b.getBoolean("phone_permission")&&Objects.equals(a.getIntegerArrayList("slots"),b.getIntegerArrayList("slots"))&&Objects.equals(a.getIntegerArrayList("levels"),b.getIntegerArrayList("levels"))&&Objects.equals(a.getString("network",""),b.getString("network",""))&&a.getInt("data_slot",-1)==b.getInt("data_slot",-1);}
     private static boolean sameMusic(Bundle a,Bundle b){if(a==null||b==null)return a==b;for(String key:new String[]{"media_session","title","artist"})if(!Objects.equals(a.getString(key),b.getString(key)))return false;for(String key:new String[]{"duration","position","updated","art_revision"})if(a.getLong(key)!=b.getLong(key))return false;return a.getInt("state")==b.getInt("state")&&a.getBoolean("active")==b.getBoolean("active")&&a.getBoolean("granted")==b.getBoolean("granted")&&a.getFloat("speed")==b.getFloat("speed");}
     private static boolean activeMusic(Bundle m){return m!=null&&m.getBoolean("granted")&&m.getBoolean("active")&&MusicPlayback.hasTrack(m.getInt("state"));}
     private static String musicKey(Bundle m){return m.getString("media_session","")+"\n"+m.getString("title","")+"\n"+m.getString("artist","");}
@@ -238,10 +247,10 @@ public final class DashboardHud {
             ||widgets.enabled(WidgetSettings.POWER)&&widgets.enabled(WidgetSettings.POWER_CHART)&&live(powerHistory,now,widgets.powerChartWindowMs());
     }
     private static boolean live(ArrayDeque<Sample> history,long now,long window){int count=0;for(Sample s:history)if(s.elapsed()>=now-window&&s.elapsed()<=now)count++;return count>=2;}
-    /** Static cards only re-encode when a value expires; animations tick at 20 Hz, playing music and a live chart once a second. */
+    /** Static cards only re-encode when a value expires; animations tick at 20 Hz, playing music and a live chart once a second, the paired clock once a minute. */
     public synchronized long revision(long now){
         sync(now);
-        long tick=animating(now)?now/50:musicMoving(now)||chartLive(now)||probeShown()?now/1000:0;
+        long tick=animating(now)?now/50:musicMoving(now)||chartLive(now)||probeShown()?now/1000:SidebarLayout.paired(visibleMask(now))?Math.floorDiv(wall.getAsLong(),60000L):0;
         long flags=expiryFlags(now)|(hillHold(now)?1024:0)|(volumeVisible(now)?2048:0)|((long)visibleBits(now)<<12);
         // Ten conditional widgets need 22 flag bits; the tick keeps the rest of the 44 below the revision.
         return(revision<<44)^((flags&0x3FFFFFL)<<22)^(tick&0x3FFFFFL);
@@ -331,10 +340,14 @@ public final class DashboardHud {
     private String musicArtist(){String artist=music==null?"":music.getString("artist","");return artist.isEmpty()?"未知歌手":artist;}
     /** The music card keeps the full sidebar width; title and artist are ellipsized inside it. */
     private float musicWidth(){return SidebarLayout.WIDTH;}
+    /** A card painted taller than halfway between one row and the pair height uses the two-row layout of the shared phone and tyre row. */
+    private static final float PAIR_STYLE=(SidebarLayout.PHONE_HEIGHT+SidebarLayout.PAIR_HEIGHT)/2,PAIR_TOP=SidebarLayout.PHONE_HEIGHT/2,PAIR_BOTTOM=34;
+    private static boolean twoRows(SidebarLayout.Box box){return box.height()>PAIR_STYLE;}
     /** One row: `前 2.4 bar 29 ℃  后 2.6 bar 30 ℃` across the full sidebar width; an overlong row is squeezed rather than clipped. */
     private static final float TYRE_SEPARATOR=8,TYRE_LABEL=11,TYRE_VALUE=14,TYRE_UNIT=9;
     private void drawTyres(Canvas c,long now,SidebarLayout.Box box){
-        float left=box.left();surface(c,left,0,box.right()-left,SidebarLayout.TYRE_HEIGHT,11);
+        float left=box.left();surface(c,left,0,box.right()-left,box.height(),11);
+        if(twoRows(box)){drawTyrePair(c,now,box);return;}
         float centerY=SidebarLayout.TYRE_HEIGHT/2,available=box.width()-2*TYRE_INSET,needed=tyreContentWidth(now);
         int saved=c.save();
         if(needed>available&&needed>0){c.translate(left+TYRE_INSET,0);c.scale(available/needed,1);c.translate(-(left+TYRE_INSET),0);}
@@ -342,6 +355,28 @@ public final class DashboardHud {
         if(widgets.enabled(WidgetSettings.TYRE_FRONT)){x=tyreWheel(c,"前",tires.front(),now,x,centerY);first=false;}
         if(widgets.enabled(WidgetSettings.TYRE_REAR)){if(!first)x+=TYRE_SEPARATOR;tyreWheel(c,"后",tires.rear(),now,x,centerY);}
         c.restoreToCount(saved);
+    }
+    /** Two rows, `F` above `R`, as aligned columns right-aligned to the card's inner right edge; a disabled wheel keeps its row as `--`. */
+    private void drawTyrePair(Canvas c,long now,SidebarLayout.Box box){
+        float left=box.left(),available=box.width()-2*TYRE_INSET;
+        TireTelemetry.Wheel front=widgets.enabled(WidgetSettings.TYRE_FRONT)?tires.front():TireTelemetry.EMPTY_WHEEL,rear=widgets.enabled(WidgetSettings.TYRE_REAR)?tires.rear():TireTelemetry.EMPTY_WHEEL;
+        String fp=expired(front.pressure(),now)?"--":TireTelemetry.pressure(front.pressure()),rp=expired(rear.pressure(),now)?"--":TireTelemetry.pressure(rear.pressure());
+        String ft=expired(front.temperature(),now)?"--":TireTelemetry.temperature(front.temperature()),rt=expired(rear.temperature(),now)?"--":TireTelemetry.temperature(rear.temperature());
+        float labelW=Math.max(measure("F",TYRE_LABEL,false),measure("R",TYRE_LABEL,false)),pressW=Math.max(measure(fp,TYRE_VALUE,true),measure(rp,TYRE_VALUE,true)),tempW=Math.max(measure(ft,TYRE_VALUE,true),measure(rt,TYRE_VALUE,true));
+        float labelX=left+TYRE_INSET,pressX=labelX+labelW+3,barX=pressX+pressW+2;
+        float needed=labelW+3+pressW+2+measure("bar",TYRE_UNIT,false)+4+tempW+1+measure("℃",TYRE_UNIT,false),insetRight=labelX+Math.max(needed,available);int saved=c.save();
+        if(needed>available&&needed>0){c.translate(left+TYRE_INSET,0);c.scale(available/needed,1);c.translate(-(left+TYRE_INSET),0);}
+        tyreRow(c,"F",fp,ft,labelX,pressX,barX,insetRight,PAIR_TOP);tyreRow(c,"R",rp,rt,labelX,pressX,barX,insetRight,PAIR_BOTTOM);
+        c.restoreToCount(saved);
+    }
+    /** One tyre-pair row at fixed columns: label then pressure left-aligned, `bar` at its own fixed column, temperature and `℃` right-aligned. */
+    private void tyreRow(Canvas c,String label,String pressure,String temperature,float labelX,float pressX,float barX,float insetRight,float centerY){
+        centerLine(c,label,labelX,centerY,TYRE_LABEL,p.label(),false);
+        centerLine(c,pressure,pressX,centerY,TYRE_VALUE,p.text(),true);
+        centerLine(c,"bar",barX,centerY,TYRE_UNIT,p.unit(),false);
+        float unitX=insetRight-measure("℃",TYRE_UNIT,false),tempX=unitX-1-measure(temperature,TYRE_VALUE,true);
+        centerLine(c,temperature,tempX,centerY,TYRE_VALUE,p.text(),true);
+        centerLine(c,"℃",unitX,centerY,TYRE_UNIT,p.unit(),false);
     }
     private float tyreWheel(Canvas c,String label,TireTelemetry.Wheel wheel,long now,float x,float centerY){
         String pressure=expired(wheel.pressure(),now)?"--":TireTelemetry.pressure(wheel.pressure());
@@ -364,25 +399,35 @@ public final class DashboardHud {
         return measure(label,TYRE_LABEL,false)+3+measure(pressure,TYRE_VALUE,true)+2+measure("bar",TYRE_UNIT,false)+4+measure(temperature,TYRE_VALUE,true)+1+measure("℃",TYRE_UNIT,false);
     }
     private float tyreWidth(){return SidebarLayout.WIDTH;}
-    /** Label, large value and unit on the first row; below it the optional curve over the configured chart window. */
-    private void drawMetric(Canvas c,long now,SidebarLayout.Box box,String label,String value,String unit,ArrayDeque<Sample> history,boolean chart,long window,int decimals,float minSpan){
+    /** Without the chart one row, label left and value right-aligned; with it label over value in the text column and the curve to its right. */
+    private void drawMetric(Canvas c,long now,SidebarLayout.Box box,String label,String value,String unit,ArrayDeque<Sample> history,boolean chart,long window,float minSpan){
         float left=box.left(),contentLeft=left+INSET,contentRight=box.right()-INSET;
         surface(c,left,0,box.right()-left,SidebarLayout.metricHeight(chart),11);
-        float centerY=SidebarLayout.VOLTAGE_HEIGHT/2;
-        centerLine(c,label,contentLeft,centerY,13,p.label(),false);
-        centerLine(c,value,contentLeft+VALUE_COLUMN,centerY,17,p.text(),true);
-        centerLine(c,unit,contentLeft+VALUE_COLUMN+measure(value,17,true)+4,centerY,11,p.unit(),false);
-        if(chart)drawChart(c,now,history,window,decimals,minSpan,contentLeft,30,contentRight,SidebarLayout.VOLTAGE_CHART_HEIGHT-6);
+        if(!chart){
+            float centerY=SidebarLayout.VOLTAGE_HEIGHT/2,unitX=contentRight-measure(unit,11,false);
+            centerLine(c,label,contentLeft,centerY,13,p.label(),false);
+            centerLine(c,value,unitX-4-measure(value,17,true),centerY,17,p.text(),true);
+            centerLine(c,unit,unitX,centerY,11,p.unit(),false);return;
+        }
+        centerLine(c,label,contentLeft,PAIR_TOP,13,p.label(),false);
+        float column=metricColumn(),valueWidth=measure(value,17,true),textWidth=valueWidth+4+measure(unit,11,false);
+        int saved=c.save();
+        if(textWidth>column&&textWidth>0){c.translate(contentLeft,0);c.scale(column/textWidth,1);c.translate(-contentLeft,0);}
+        centerLine(c,value,contentLeft,PAIR_BOTTOM,17,p.text(),true);
+        centerLine(c,unit,contentLeft+valueWidth+4,PAIR_BOTTOM,11,p.unit(),false);
+        c.restoreToCount(saved);
+        drawChart(c,now,history,window,minSpan,contentLeft+column+METRIC_CHART_GAP,PAIR_TOP-6,contentRight,PAIR_BOTTOM+6);
     }
     private void drawVoltage(Canvas c,long now,SidebarLayout.Box box){
         BatteryTelemetry.Value voltage=battery.voltage();
-        drawMetric(c,now,box,"电压",voltageFromBms(now)?String.format(Locale.ROOT,"%.1f",bms.data().volts()):expired(voltage,now)?"--":BatteryTelemetry.voltage(voltage),"V",voltageHistory,widgets.enabled(WidgetSettings.VOLTAGE_CHART),widgets.chartWindowMs(),1,0.5f);
+        drawMetric(c,now,box,"电压",voltageFromBms(now)?String.format(Locale.ROOT,"%.1f",bms.data().volts()):expired(voltage,now)?"--":BatteryTelemetry.voltage(voltage),"V",voltageHistory,widgets.enabled(WidgetSettings.VOLTAGE_CHART),widgets.chartWindowMs(),0.5f);
     }
     private void drawSpeed(Canvas c,long now,SidebarLayout.Box box){
-        drawMetric(c,now,box,"速度",speedExpired(now)?"--":String.format(Locale.ROOT,"%.1f",ride.speedKmh()),"km/h",speedHistory,widgets.enabled(WidgetSettings.SPEED_CHART),widgets.speedChartWindowMs(),1,1f);
+        drawMetric(c,now,box,"速度",speedExpired(now)?"--":String.format(Locale.ROOT,"%.1f",ride.speedKmh()),"km/h",speedHistory,widgets.enabled(WidgetSettings.SPEED_CHART),widgets.speedChartWindowMs(),1f);
     }
     private void drawPower(Canvas c,long now,SidebarLayout.Box box){
-        drawMetric(c,now,box,"功率",powerFromBms(now)?String.valueOf(bms.data().watts()):powerExpired(now)?"--":String.valueOf(ride.power()),"W",powerHistory,widgets.enabled(WidgetSettings.POWER_CHART),widgets.powerChartWindowMs(),0,50f);
+        int mode=widgets.powerFormat();boolean known=powerFromBms(now)||!powerExpired(now);int watts=powerFromBms(now)?bms.data().watts():known?ride.power():0;
+        drawMetric(c,now,box,"功率",known?PowerFormat.value(watts,mode):"--",known?PowerFormat.unit(watts,mode):mode==PowerFormat.KW_ALWAYS?"kW":"W",powerHistory,widgets.enabled(WidgetSettings.POWER_CHART),widgets.powerChartWindowMs(),50f);
     }
     /** Height the device reported (or, for the ESC, was last sent), 已连接 for a timed lift that has none, otherwise 未连接. */
     private void drawLamp(Canvas c,SidebarLayout.Box box){
@@ -411,7 +456,7 @@ public final class DashboardHud {
     }
     private boolean speedExpired(long now){return ride==null||ride.speedAt()==0||ride.speedTenths()<0||now-ride.speedAt()>widgets.speedLimitMs();}
     private boolean powerExpired(long now){return ride==null||!ride.hasPower()||now-ride.powerAt()>widgets.powerLimitMs();}
-    private void drawChart(Canvas c,long now,ArrayDeque<Sample> history,long window,int decimals,float minSpan,float left,float top,float right,float bottom){
+    private void drawChart(Canvas c,long now,ArrayDeque<Sample> history,long window,float minSpan,float left,float top,float right,float bottom){
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);paint.setColor(p.divider());c.drawLine(left,bottom+.5f,right,bottom+.5f,paint);paint.setStyle(Paint.Style.FILL);
         float min=Float.MAX_VALUE,max=-Float.MAX_VALUE;int count=0;long start=now-window;
         for(Sample s:history){if(s.elapsed()<start||s.elapsed()>now)continue;count++;min=Math.min(min,s.value());max=Math.max(max,s.value());}
@@ -424,13 +469,15 @@ public final class DashboardHud {
         chartFill.lineTo(lastX,bottom);chartFill.close();
         paint.setColor(p.chartFill());c.drawPath(chartFill,paint);
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setStrokeJoin(Paint.Join.ROUND);paint.setColor(p.accent());c.drawPath(chartLine,paint);paint.setStyle(Paint.Style.FILL);
-        String pattern=decimals==0?"%.0f":"%.1f",high=String.format(Locale.ROOT,pattern,max),low=String.format(Locale.ROOT,pattern,min);
-        write(c,high,right-measure(high,8,false),top+7,8,p.unit(),false);write(c,low,right-measure(low,8,false),bottom-1,8,p.unit(),false);
     }
-    private float metricWidth(boolean chart,String template,String unit){return chart?SidebarLayout.WIDTH:2*INSET+VALUE_COLUMN+measure(template,17,true)+4+measure(unit,11,false);}
-    private float voltageWidth(){return metricWidth(widgets.enabled(WidgetSettings.VOLTAGE_CHART),"888.8","V");}
-    private float speedWidth(){return metricWidth(widgets.enabled(WidgetSettings.SPEED_CHART),"88.8","km/h");}
-    private float powerWidth(){return metricWidth(widgets.enabled(WidgetSettings.POWER_CHART),"-8888","W");}
+    private static final float METRIC_CHART_GAP=8;
+    /** Text column of the chart cards, shared so their curves line up: the widest value and unit template of the three cards. */
+    private float metricColumn(){return Math.max(template("888.8","V"),Math.max(template("88.8","km/h"),powerTemplate()));}
+    private float template(String value,String unit){return measure(value,17,true)+4+measure(unit,11,false);}
+    private float powerTemplate(){
+        int mode=widgets.powerFormat();float kw=template("-88.8","kW");
+        return mode==PowerFormat.KW_ALWAYS?kw:mode==PowerFormat.KW_ABOVE?Math.max(template("-999","W"),kw):template("-8888","W");
+    }
     /** Vertical level bar above the dashboard speaker icon; slides in from the left after a volume change, never a touch target. */
     private void drawVolume(Canvas c,long now){
         float offset=volumeOffset(now);if(Float.isNaN(offset))return;SidebarLayout.Box b=profile.volume();
@@ -480,7 +527,7 @@ public final class DashboardHud {
         return new PhoneLayout(width,simsX,slotX,batteryX,percentLeft,slot,count,known,percent);
     }
     private float phoneWidth(){return phone==null?0:phoneLayout(SIDEBAR_RIGHT).width();}
-    private SidebarLayout.Sizes sizes(){return new SidebarLayout.Sizes(phoneWidth(),musicWidth(),voltageWidth(),tyreWidth(),speedWidth(),powerWidth(),lampWidth(),SidebarLayout.WIDTH,bmsHeight(android.os.SystemClock.elapsedRealtime()));}
+    private SidebarLayout.Sizes sizes(){return new SidebarLayout.Sizes(phoneWidth(),musicWidth(),SidebarLayout.WIDTH,tyreWidth(),SidebarLayout.WIDTH,SidebarLayout.WIDTH,lampWidth(),SidebarLayout.WIDTH,bmsHeight(android.os.SystemClock.elapsedRealtime()));}
     private void bar(Canvas c,float x,float y,float width,float height,float fraction){paint.setStyle(Paint.Style.FILL);paint.setColor(p.track());c.drawRoundRect(x,y,x+width,y+height,height/2,height/2,paint);paint.setColor(p.accent());c.drawRoundRect(x,y,x+width*Math.max(0,Math.min(1,fraction)),y+height,height/2,height/2,paint);}
     /** Display-only HUD consumes touches so they cannot reach the application behind it; cards use their settled targets. */
     public synchronized Bundle touch(float x,float y,int width,int height,long now){
@@ -514,18 +561,49 @@ public final class DashboardHud {
         paint.setStrokeCap(Paint.Cap.ROUND);
         ArrayList<Integer> slots=phone.getIntegerArrayList("slots"),levels=phone.getIntegerArrayList("levels");boolean wifi=phone.getBoolean("wifi");String network=phone.getString("network","");
         // Everything anchors to the card's own right edge, so a card that slides away from the dashboard toast takes its text with it.
+        if(twoRows(box)){drawPhonePair(c,box,slots,levels,wifi,network);return;}
         PhoneLayout l=phoneLayout(box.right());int count=l.count();
-        float y=0;surface(c,box.left(),y,box.right()-box.left(),28,11);
+        float y=0;surface(c,box.left(),y,box.right()-box.left(),box.height(),11);
         float x=l.simsX();
         if(!l.known()||count==0){write(c,l.known()?"无卡":"?",x,y+19,11,p.dim(),false);x+=24;}else for(int i=0;i<count;i++){
             write(c,String.valueOf(slots.get(i)),x,y+20,11,p.dim(),false);int signal=levels!=null&&i<levels.size()?levels.get(i):-1;
             for(int bar=0;bar<4;bar++){paint.setColor(bar<signal?p.icon():p.signalOff());c.drawRoundRect(x+10+bar*6,y+22-(bar+1)*4,x+14+bar*6,y+22,1,1,paint);}if(signal<0)write(c,"?",x+16,y+15,10,p.icon(),false);x+=32+(i<count-1?6:0);
         }
-        if(wifi)drawWifi(c,l.slotX()+(SLOT_WIDTH-19)/2,y+4.5f);else if(l.slot())centerGlyph(c,network,l.slotX()+SLOT_WIDTH/2,y+14,13,p.icon(),true);
+        if(wifi)drawWifi(c,l.slotX()+(SLOT_WIDTH-19)/2,y+4.5f,19);else if(l.slot())centerGlyph(c,network,l.slotX()+SLOT_WIDTH/2,y+14,13,p.icon(),true);
         x=l.batteryX();int level=phone.getInt("battery",-1);boolean charging=phone.getBoolean("charging");int color=charging?p.batteryCharging():level>=0&&level<=20?p.batteryLow():p.icon();
         paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);c.drawRoundRect(x+1,y+7,x+24,y+21,3,3,paint);c.drawLine(x+26,y+11,x+26,y+17,paint);paint.setStyle(Paint.Style.FILL);if(level>0)c.drawRoundRect(x+3.5f,y+9.5f,x+3.5f+18*Math.min(100,level)/100f,y+18.5f,1,1,paint);
         if(charging){Path bolt=new Path();bolt.moveTo(x+14,y+6);bolt.lineTo(x+8,y+15);bolt.lineTo(x+12,y+15);bolt.lineTo(x+11,y+22);bolt.lineTo(x+18,y+12);bolt.lineTo(x+13,y+12);bolt.close();paint.setColor(p.boltOutline());paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);c.drawPath(bolt,paint);paint.setStyle(Paint.Style.FILL);paint.setColor(p.bolt());c.drawPath(bolt,paint);}
         write(c,l.percent(),l.percentLeft(),y+19,14,p.percent(),true);
+    }
+    private static final float PAIR_BATTERY_WIDTH=28,PAIR_WIFI=16,PAIR_SIM_CELL=3;
+    private static final float PAIR_SIM_PAIRED_BASE=36,PAIR_SIM_PAIRED_LOWEST=2,PAIR_SIM_PAIRED_STEP=2;
+    private static final float PAIR_SIM_SINGLE_BASE=40,PAIR_SIM_SINGLE_LOWEST=3,PAIR_SIM_SINGLE_STEP=3;
+    private static final float PAIR_SIM_SECONDARY_BASE=40,PAIR_SIM_NUMBER_Y=PAIR_BOTTOM,PAIR_SIM_NUMBER_SIZE=14;
+    /** Half-width phone card: clock and battery on top, SIM signals and Wi-Fi or network type below. */
+    private void drawPhonePair(Canvas c,SidebarLayout.Box box,ArrayList<Integer> slots,ArrayList<Integer> levels,boolean wifi,String network){
+        float left=box.left(),right=box.right();surface(c,left,0,box.width(),box.height(),11);
+        centerLine(c,clockText(),left+TYRE_INSET,PAIR_TOP,14,p.percent(),true);
+        int level=phone.getInt("battery",-1);boolean charging=phone.getBoolean("charging");float bx=right-TYRE_INSET-PAIR_BATTERY_WIDTH-3,top=PAIR_TOP-6.5f,bottom=PAIR_TOP+6.5f;
+        if(level>0){int color=charging?p.batteryCharging():level<=20?p.levelLow():p.accent();paint.setColor(color&0xffffff|0x73000000);c.drawRoundRect(bx+2,top+2,bx+2+(PAIR_BATTERY_WIDTH-4)*Math.min(100,level)/100f,bottom-2,1.5f,1.5f,paint);}
+        paint.setColor(p.icon());paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);c.drawRoundRect(bx+.75f,top+.75f,bx+PAIR_BATTERY_WIDTH-.75f,bottom-.75f,3,3,paint);c.drawLine(bx+PAIR_BATTERY_WIDTH+1.5f,PAIR_TOP-3,bx+PAIR_BATTERY_WIDTH+1.5f,PAIR_TOP+3,paint);paint.setStyle(Paint.Style.FILL);
+        centerGlyph(c,level<0?"--":String.valueOf(Math.min(100,level)),bx+PAIR_BATTERY_WIDTH/2,PAIR_TOP,10,p.text(),true);
+        boolean known=phone.getBoolean("phone_permission");int count=slots==null?0:Math.min(2,slots.size());float x=left+TYRE_INSET;
+        if(!known||count==0)centerLine(c,known?"无卡":"?",x,PAIR_BOTTOM,11,p.dim(),false);
+        else{
+            // The primary row is the default data SIM (fallback: the first slot, when the data SIM is unknown or not among slots).
+            int dataSlot=phone.getInt("data_slot",-1),primary=0;
+            for(int i=0;i<count;i++)if(slots.get(i)==dataSlot){primary=i;break;}
+            int primarySignal=levels!=null&&primary<levels.size()?levels.get(primary):-1;
+            float base=count==2?PAIR_SIM_PAIRED_BASE:PAIR_SIM_SINGLE_BASE,lowest=count==2?PAIR_SIM_PAIRED_LOWEST:PAIR_SIM_SINGLE_LOWEST,step=count==2?PAIR_SIM_PAIRED_STEP:PAIR_SIM_SINGLE_STEP;
+            for(int bar=0;bar<4;bar++){paint.setColor(primarySignal>=0&&bar<primarySignal?p.icon():p.signalOff());float h=lowest+bar*step;c.drawRoundRect(x+bar*4.5f,base-h,x+bar*4.5f+3,base,1,1,paint);}
+            if(count==2){
+                int secondary=1-primary,secondarySignal=levels!=null&&secondary<levels.size()?levels.get(secondary):-1;
+                for(int bar=0;bar<4;bar++){paint.setColor(secondarySignal>=0&&bar<secondarySignal?p.icon():p.signalOff());c.drawRoundRect(x+bar*4.5f,PAIR_SIM_SECONDARY_BASE-PAIR_SIM_CELL,x+bar*4.5f+3,PAIR_SIM_SECONDARY_BASE,1,1,paint);}
+            }
+            centerGlyph(c,primarySignal<0?"?":String.valueOf(slots.get(primary)),x+4*4.5f+6,PAIR_SIM_NUMBER_Y,PAIR_SIM_NUMBER_SIZE,p.icon(),true);
+        }
+        if(wifi)drawWifi(c,right-TYRE_INSET-23*PAIR_WIFI/24,PAIR_BOTTOM-12*PAIR_WIFI/24,PAIR_WIFI);
+        else if(!network.isEmpty())centerLine(c,network,right-TYRE_INSET-measure(network,12,true),PAIR_BOTTOM,12,p.icon(),true);
     }
     /** Same three arcs and dot as i-wifi in the HTML prototype, in its 24 by 24 viewBox. */
     private static Path wifiGlyph(){
@@ -536,8 +614,8 @@ public final class DashboardHud {
         float angle=(float)Math.toDegrees(Math.asin(halfChord/radius));
         path.addArc(12-radius,centerY-radius,12+radius,centerY+radius,270-angle,angle*2);
     }
-    private void drawWifi(Canvas c,float x,float y){
-        int save=c.save();c.translate(x,y);c.scale(19f/24,19f/24);
+    private void drawWifi(Canvas c,float x,float y,float size){
+        int save=c.save();c.translate(x,y);c.scale(size/24,size/24);
         paint.setColor(p.icon());paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setStrokeCap(Paint.Cap.ROUND);
         c.drawPath(wifiGlyph,paint);paint.setStyle(Paint.Style.FILL);c.drawCircle(12,19,1,paint);c.restoreToCount(save);
     }

@@ -105,8 +105,9 @@ final class DashboardLayoutTests {
         boolean allRight=true,anyLeft=false;
         for(int w:new int[]{WidgetSettings.PHONE,WidgetSettings.MUSIC,WidgetSettings.TYRES,WidgetSettings.VOLTAGE,WidgetSettings.SPEED,WidgetSettings.POWER,WidgetSettings.LAMP}){
             SidebarLayout.Box one=single.of(w),two=twoColumn.of(w);
-            allRight&=one!=null&&one.right()==SidebarLayout.RIGHT&&one.width()==SidebarLayout.WIDTH;anyLeft|=two!=null&&two.right()!=SidebarLayout.RIGHT;
+            boolean pairHalf=w==WidgetSettings.PHONE||w==WidgetSettings.TYRES;
+            allRight&=one!=null&&one.left()>=SidebarLayout.LEFT&&one.right()<=SidebarLayout.RIGHT&&one.width()==(pairHalf?SidebarLayout.PAIR_WIDTH:SidebarLayout.WIDTH);anyLeft|=two!=null&&two.right()<=SidebarLayout.LEFT_COLUMN_RIGHT;
         }
-        check(allRight&&anyLeft&&!single.notificationDodged(),"the half-screen column keeps every full-width card on the right where the two-column layout would overflow to the left");
+        check(allRight&&anyLeft&&!single.notificationDodged()&&single.phone().right()+SidebarLayout.GAP==single.tyres().left()&&single.tyres().right()==SidebarLayout.RIGHT,"the half-screen column keeps every card on the right, the phone and tyre halves side by side, where the two-column layout would overflow to the left");
     }
 }

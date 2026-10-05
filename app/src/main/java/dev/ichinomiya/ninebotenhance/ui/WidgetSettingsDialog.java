@@ -13,7 +13,8 @@ import java.util.*;
 /**
  * Display switches per widget. The cards are listed top down like the screen: the left column first, a draggable divider line, then
  * the right column; rows and the divider reorder by dragging their handles. Every widget has a condition button and those with
- * options a settings button. The volume bar and the hill-hold dodge follow below; the lamp and BMS pages and the read settings sit on the settings page itself.
+ * options a settings button; phone status and tyres share one entry with a switch and a condition button each. The volume bar and the
+ * hill-hold dodge follow below; the lamp and BMS pages and the read settings sit on the settings page itself.
  */
 public final class WidgetSettingsDialog {
     public static void show(Activity activity,FrameClient frames,View reference){
@@ -25,7 +26,7 @@ public final class WidgetSettingsDialog {
         LinkedHashMap<Integer,CheckBox> checks=new LinkedHashMap<>();
         content.addView(WidgetOptionsDialog.caption(activity,theme,"左侧"));
         List<Integer> topDown=new ArrayList<>(settings.order());Collections.reverse(topDown);
-        for(int flag:topDown)list.addView(flag==WidgetSettings.COLUMN_DIVIDER?divider(activity,theme,list,scroll):row(activity,frames,reference,theme,settings,flag,checks,list,scroll),rowParams(activity));
+        for(int flag:topDown)list.addView(flag==WidgetSettings.COLUMN_DIVIDER?divider(activity,theme,list,scroll):flag==WidgetSettings.PHONE_TYRES?pair(activity,frames,reference,theme,settings,checks,list,scroll):row(activity,frames,reference,theme,settings,flag,checks,list,scroll),rowParams(activity));
         content.addView(list);
         content.addView(row(activity,frames,reference,theme,settings,WidgetSettings.VOLUME,checks,null,null),rowParams(activity));
         LinearLayout hold=(LinearLayout)row(activity,frames,reference,theme,settings,WidgetSettings.HILL_HOLD_DODGE,checks,null,null);
@@ -52,7 +53,7 @@ public final class WidgetSettingsDialog {
     }
     static String label(int flag){
         return switch(flag){
-            case WidgetSettings.PHONE->"手机状态";case WidgetSettings.MUSIC->"音乐";case WidgetSettings.TYRES->"胎压";case WidgetSettings.VOLTAGE->"电压";case WidgetSettings.SPEED->"速度";
+            case WidgetSettings.PHONE_TYRES->"手机 + 胎压";case WidgetSettings.PHONE->"手机状态";case WidgetSettings.MUSIC->"音乐";case WidgetSettings.TYRES->"胎压";case WidgetSettings.VOLTAGE->"电压";case WidgetSettings.SPEED->"速度";
             case WidgetSettings.POWER->"功率";case WidgetSettings.NOTIFICATIONS->"通知";case WidgetSettings.VOLUME->"音量";case WidgetSettings.HILL_HOLD_DODGE->"驻车避让";case WidgetSettings.LAMP->"大灯";case WidgetSettings.BMS->"BMS";default->"";
         };
     }
@@ -78,7 +79,6 @@ public final class WidgetSettingsDialog {
         row.addView(box,new LinearLayout.LayoutParams(0,-2,1));
         if(flag!=WidgetSettings.HILL_HOLD_DODGE)row.addView(small(activity,theme,"条件",v->WidgetConditionDialog.show(activity,frames,reference,flag,label(flag))),smallParams(activity));
         Runnable open=switch(flag){
-            case WidgetSettings.TYRES->()->WidgetOptionsDialog.tyres(activity,frames,reference);
             case WidgetSettings.VOLTAGE->()->WidgetOptionsDialog.voltage(activity,frames,reference);
             case WidgetSettings.SPEED->()->WidgetOptionsDialog.speed(activity,frames,reference);
             case WidgetSettings.POWER->()->WidgetOptionsDialog.power(activity,frames,reference);
@@ -89,6 +89,17 @@ public final class WidgetSettingsDialog {
         };
         if(open!=null)row.addView(small(activity,theme,"设置",v->open.run()),smallParams(activity));
         return row;
+    }
+    /** The shared phone and tyre entry: one handle with the name and its settings button, then a switch and a condition button for each card. */
+    private static View pair(Activity activity,FrameClient frames,View reference,MirrorUi theme,WidgetSettings settings,Map<Integer,CheckBox> checks,LinearLayout list,ScrollView scroll){
+        LinearLayout group=new LinearLayout(activity);group.setOrientation(LinearLayout.VERTICAL);group.setTag(WidgetSettings.PHONE_TYRES);
+        LinearLayout header=new LinearLayout(activity);header.setGravity(Gravity.CENTER_VERTICAL);int indent=MirrorUi.dp(activity,32);
+        TextView handle=handle(activity,theme);header.addView(handle,new LinearLayout.LayoutParams(indent,-1));handle.setOnTouchListener(new DragHandle(group,list,scroll));
+        TextView name=new TextView(activity);name.setText(label(WidgetSettings.PHONE_TYRES));name.setTextColor(theme.text);name.setTextSize(16);name.setPadding(0,MirrorUi.dp(activity,9),0,MirrorUi.dp(activity,9));
+        header.addView(name,new LinearLayout.LayoutParams(0,-2,1));header.addView(small(activity,theme,"设置",v->WidgetOptionsDialog.pair(activity,frames,reference)),smallParams(activity));
+        group.addView(header);
+        for(int flag:new int[]{WidgetSettings.PHONE,WidgetSettings.TYRES}){View line=row(activity,frames,reference,theme,settings,flag,checks,null,null);line.setPadding(indent,0,0,0);group.addView(line);}
+        return group;
     }
     private static Button small(Activity activity,MirrorUi theme,String text,View.OnClickListener click){
         Button b=new Button(activity);b.setText(text);b.setAllCaps(false);theme.button(b,null);b.setTextSize(12);

@@ -83,7 +83,8 @@ public final class HookCatalog {
         resource("id","vMainContainer","卡片容器"),
         resource("id","ivCruise","原巡航按钮"),
         resource("id","layoutHistory","按钮行插入锚点"),
-        resource("id","layoutNavigation","卡片结构校验"));
+        resource("id","layoutNavigation","卡片结构校验"),
+        resource("id","tvSub","页面底部一行"));
 
     /** Resolve every target; the class resolver may search several class loaders, the resource resolver returns 0 for unknown names. */
     public static Report verify(List<Target> targets,Function<String,Class<?>> classes,ToIntFunction<Target> resources){

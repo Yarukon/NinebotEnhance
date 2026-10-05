@@ -2,6 +2,7 @@ package dev.ichinomiya.ninebotenhance.ui;
 
 import dev.ichinomiya.ninebotenhance.client.FrameClient;
 import dev.ichinomiya.ninebotenhance.core.HiddenFeatures;
+import dev.ichinomiya.ninebotenhance.ipc.Ipc;
 
 import android.app.Activity;
 import android.content.Context;
@@ -35,6 +36,7 @@ import java.util.regex.Pattern;
 public final class VehicleCardInjector {
     private static final String MARKER = "dev.ichinomiya.ninebotenhance.direct-button";
     private static final String HARDKEY_MARKER = MARKER + ".hardkey";
+    private static final String RENDER_MARKER = MARKER + ".render";
     public static final String NAVIGATION_CARD = "layout_detail_navigation_card", LOCATION_CARD = "layout_detail_location_card", LOCATION_ITEM = "layout_detail_location_card_item";
     private static final long REFRESH_MS = 1000;
     private static final int SCAN_BUDGET = 2500;
@@ -42,9 +44,12 @@ public final class VehicleCardInjector {
     private static final int NINEBOT_FILL_DARK = 0xff1c1f24, NINEBOT_FILL_LIGHT = 0xfff3f5f8, NINEBOT_RADIUS_DP = 15;
     /** The bottom line of the vehicle page: the ownership days on a personal account, the vehicle name on a family account. */
     private static final Pattern OWNERSHIP = Pattern.compile("拥有爱车|的九号电");
+    /** A family account shows the vehicle name under this id instead of matching OWNERSHIP's text. */
+    private static final String LABEL_ID = "tvSub", LABEL_CONTAINER = "widgetContainer";
     /** One installed row; {@code anchor} is the card it was placed against and doubles as the theme reference. */
     public record Row(LinearLayout view, ImageButton display, Button cast, Button settings, View anchor, MirrorUi theme) {}
     private final WeakHashMap<View, Boolean> ownershipLabels = new WeakHashMap<>();
+    private final WeakHashMap<TextView, Boolean> renderTestFailed = new WeakHashMap<>();
     private final WeakHashMap<View, Row> rows = new WeakHashMap<>();
     private WeakReference<View> navigationCard = new WeakReference<>(null);
     private final DirectCastController controller;
@@ -84,8 +89,11 @@ public final class VehicleCardInjector {
         ArrayDeque<View> queue = new ArrayDeque<>(); queue.add(root);
         for (int count = 0; !queue.isEmpty() && count < SCAN_BUDGET; count++) {
             View view = queue.removeFirst();
-            if (MARKER.equals(view.getTag()) || HARDKEY_MARKER.equals(view.getTag())) continue;
-            if (view instanceof TextView && !(view instanceof Button)) ownershipEntry((TextView)view);
+            if (MARKER.equals(view.getTag()) || HARDKEY_MARKER.equals(view.getTag()) || RENDER_MARKER.equals(view.getTag())) continue;
+            if (view instanceof TextView && !(view instanceof Button)) {
+                TextView label = (TextView)view; boolean owns = ownership(label);
+                ownershipEntry(label, owns); renderTestEntry(label, owns);
+            }
             String name = name(view);
             if (view instanceof ViewGroup && name.equals("vMainContainer")) {
                 View cruise = child((ViewGroup)view, "ivCruise");
@@ -225,9 +233,9 @@ public final class VehicleCardInjector {
         }
     }
     /** A second way into the settings: tapping the bottom line opens the same dialog as the row button. */
-    private void ownershipEntry(TextView label) {
+    private void ownershipEntry(TextView label, boolean match) {
         if (ownershipLabels.containsKey(label)) return;
-        CharSequence value = label.getText(); if (value == null || !OWNERSHIP.matcher(value).find()) return;
+        if (!match) return;
         if (label.hasOnClickListeners()) {
             // A family account shows the vehicle name there and Ninebot may already handle the tap; the long press is free.
             if (label.hasOnLongClickListeners()) {
@@ -246,6 +254,98 @@ public final class VehicleCardInjector {
         }
         label.setOnClickListener(v -> { Activity activity = activity(v.getContext()); if (activity != null && !activity.isFinishing()) controller.settings(activity, v); });
         ownershipLabels.put(label, Boolean.TRUE); frames.report("DIRECT UI ownership label doubles as a settings entry");
+    }
+    /** The ownership line's text (OWNERSHIP) or, on a family account, the vehicle name label by its id inside widgetContainer, as that container's last (footer) child. */
+    private static boolean ownership(TextView label) {
+        CharSequence value = label.getText();
+        if (value != null && OWNERSHIP.matcher(value).find()) return true;
+        if (!LABEL_ID.equals(name(label))) return false;
+        View child = label;
+        for (ViewParent parent = label.getParent(); parent instanceof View; parent = ((View)parent).getParent()) {
+            View view = (View)parent;
+            if (LABEL_CONTAINER.equals(name(view))) {
+                if (!(view instanceof ViewGroup)) return false;
+                ViewGroup container = (ViewGroup)view;
+                return container.getChildCount() > 0 && container.getChildAt(container.getChildCount() - 1) == child;
+            }
+            child = view;
+        }
+        return false;
+    }
+    /** The 测试渲染 button beside the ownership line, installed lazily on first use while frames.renderTest() is on and the label matches. */
+    private void renderTestEntry(TextView label, boolean match) {
+        if (!match || !frames.renderTest()) {
+            Button existing = findRenderButton(label);
+            if (existing != null) existing.setVisibility(View.GONE);
+            return;
+        }
+        Button button = findRenderButton(label);
+        if (button == null) {
+            if (renderTestFailed.containsKey(label)) return;
+            button = installRenderButton(label);
+            if (button == null) { renderTestFailed.put(label, Boolean.TRUE); return; }
+        }
+        button.setVisibility(View.VISIBLE);
+    }
+    /** The already-installed render-test button among the label's siblings, if any; avoids keeping a label -> button map alive. */
+    private static Button findRenderButton(TextView label) {
+        ViewParent parent = label.getParent();
+        if (!(parent instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup)parent;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (RENDER_MARKER.equals(child.getTag()) && child instanceof Button) return (Button)child;
+        }
+        return null;
+    }
+    private Button installRenderButton(TextView label) {
+        if (!(label.getParent() instanceof ViewGroup)) return null;
+        ViewGroup parent = (ViewGroup)label.getParent();
+        Activity activity = activity(label.getContext());
+        if (activity == null || activity.isFinishing()) return null;
+        MirrorUi theme = new MirrorUi(activity, label);
+        int fill = theme.dark ? NINEBOT_FILL_DARK : NINEBOT_FILL_LIGHT;
+        Button button = button(theme, label.getContext(), fill);
+        button.setText("测试渲染"); button.setTag(RENDER_MARKER);
+        button.setAutoSizeTextTypeWithDefaults(TextView.AUTO_SIZE_TEXT_TYPE_NONE);
+        button.setOnClickListener(v -> {
+            Activity target = activity(v.getContext());
+            if (target == null || target.isFinishing()) return;
+            View reference = v.getParent() instanceof View ? (View)v.getParent() : v;
+            try { RenderTestDialog.show(target, frames, reference); }
+            catch (RuntimeException e) { ErrorDialog.show(target, v, "测试渲染打开失败\n" + Ipc.error(e)); }
+        });
+        if (parent.getClass().getName().equals("androidx.constraintlayout.widget.ConstraintLayout")) {
+            if (!installRenderConstraint(parent, label, button)) return null;
+        } else if (parent instanceof LinearLayout) {
+            LinearLayout row = (LinearLayout)parent;
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+            if (row.getOrientation() == LinearLayout.VERTICAL) params.topMargin = dp(label, 8);
+            else { params.setMarginStart(dp(label, 8)); params.gravity = Gravity.CENTER_VERTICAL; }
+            parent.addView(button, parent.indexOfChild(label) + 1, params);
+        } else {
+            frames.report("DIRECT UI render-test button unsupported parent " + parent.getClass().getName());
+            return null;
+        }
+        return button;
+    }
+    /** Placed to the label's end, vertically centered on it, following installInside's reflection pattern. */
+    private boolean installRenderConstraint(ViewGroup parent, TextView label, Button button) {
+        try {
+            if (label.getId() == View.NO_ID) label.setId(View.generateViewId());
+            Class<?> params = label.getLayoutParams().getClass();
+            if (!params.getName().equals("androidx.constraintlayout.widget.ConstraintLayout$LayoutParams")) return false;
+            ViewGroup.MarginLayoutParams buttonParams = (ViewGroup.MarginLayoutParams)params.getConstructor(int.class, int.class).newInstance(-2, -2);
+            set(params, buttonParams, "startToEnd", label.getId());
+            set(params, buttonParams, "topToTop", label.getId());
+            set(params, buttonParams, "bottomToBottom", label.getId());
+            buttonParams.setMarginStart(dp(label, 8));
+            parent.addView(button, buttonParams);
+            return true;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            frames.report("DIRECT UI render-test button failed " + e.getClass().getSimpleName());
+            return false;
+        }
     }
     private static void set(Class<?> type, Object value, String name, int number) throws ReflectiveOperationException { type.getField(name).setInt(value, number); }
     public static View child(ViewGroup group, String name) {

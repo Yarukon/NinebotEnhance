@@ -8,25 +8,30 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
                              List<Integer> order,Map<Integer,WidgetCondition> conditions) {
     public static final int PHONE=1,TYRES=2,MUSIC=4,NOTIFICATIONS=16,TYRE_FRONT=32,TYRE_REAR=64,VOLTAGE=128,TYRE_READ=256,
             VOLTAGE_READ=512,VOLTAGE_CHART=1024,MUSIC_AUTO_HIDE=2048,VOLUME=4096,REGISTER_PROBE=8192,HILL_HOLD_DODGE=16384,
-            SPEED=32768,POWER=65536,SPEED_CHART=131072,POWER_CHART=262144,LAMP=524288,BMS=1048576,VOLTAGE_FROM_BMS=2097152,POWER_FROM_BMS=4194304;
+            SPEED=32768,POWER=65536,SPEED_CHART=131072,POWER_CHART=262144,LAMP=524288,BMS=1048576,VOLTAGE_FROM_BMS=2097152,POWER_FROM_BMS=4194304,TYRES_LEFT=8388608,
+            POWER_KW=16777216,POWER_KW_ALWAYS=33554432;
     public static final int ALL=PHONE|TYRES|MUSIC|NOTIFICATIONS|TYRE_FRONT|TYRE_REAR|VOLTAGE|TYRE_READ|VOLTAGE_READ|VOLTAGE_CHART|MUSIC_AUTO_HIDE|VOLUME|REGISTER_PROBE|HILL_HOLD_DODGE
-            |SPEED|POWER|SPEED_CHART|POWER_CHART|LAMP|BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS;
+            |SPEED|POWER|SPEED_CHART|POWER_CHART|LAMP|BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS|TYRES_LEFT|POWER_KW|POWER_KW_ALWAYS;
     /** Switches introduced by later preference versions; masks saved by older builds get them switched on once. */
     public static final int ADDED_IN_V2=VOLTAGE_READ|VOLTAGE_CHART|MUSIC_AUTO_HIDE|VOLUME,ADDED_IN_V3=HILL_HOLD_DODGE,ADDED_IN_V4=SPEED_CHART|POWER_CHART;
     /**
      * Version 5 changed the hill-hold minimum time semantics (it now gates the release too) and reset its default; older saves
      * take the new default. Version 6 added the lamp card, which older saves must not inherit: without a bound lamp it would
-     * only ever read "未连接". Version 7 added the BMS card and the two BMS-first source switches, likewise not inherited.
+     * only ever read "未连接". Version 7 added the BMS card and the two BMS-first source switches, likewise not inherited; the later
+     * pair swap and the power card's kW switches are cleared on the same step, so the all-on fallback of a missing save keeps the
+     * phone on the left and the power in watts.
      */
     public static final int PREFERENCE_VERSION=7;
     /** A fresh install shows only the voltage, music, tyre, phone and notification cards; every other switch starts off. */
-    public static final int OFF_BY_DEFAULT=REGISTER_PROBE|SPEED|POWER|LAMP|BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS|VOLUME|HILL_HOLD_DODGE;
+    public static final int OFF_BY_DEFAULT=REGISTER_PROBE|SPEED|POWER|LAMP|BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS|VOLUME|HILL_HOLD_DODGE|TYRES_LEFT|POWER_KW|POWER_KW_ALWAYS;
     /** Marker inside the order: entries before it form the right column (bottom up), entries after it the left column (bottom up). */
     public static final int COLUMN_DIVIDER=0;
+    /** Order token of the shared phone and tyre row; the two cards keep their own switches and conditions. */
+    public static final int PHONE_TYRES=PHONE|TYRES;
     /** Cards of the two columns; the notification block is one of them and always belongs to the right column. */
-    public static final List<Integer> CARDS=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP,BMS);
+    public static final List<Integer> CARDS=List.of(NOTIFICATIONS,PHONE_TYRES,MUSIC,VOLTAGE,SPEED,POWER,LAMP,BMS);
     /** Default: everything in the right column, bottom up, and an empty left column. */
-    public static final List<Integer> DEFAULT_ORDER=List.of(NOTIFICATIONS,PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,LAMP,BMS,COLUMN_DIVIDER);
+    public static final List<Integer> DEFAULT_ORDER=List.of(NOTIFICATIONS,PHONE_TYRES,MUSIC,VOLTAGE,SPEED,POWER,LAMP,BMS,COLUMN_DIVIDER);
     /** Widgets that accept a display condition, in the index order the renderer uses for its timers. */
     public static final int[] CONDITIONAL={PHONE,MUSIC,TYRES,VOLTAGE,SPEED,POWER,NOTIFICATIONS,VOLUME,LAMP,BMS};
     public static final int MIN_TYRE_SECONDS=5,MAX_TYRE_SECONDS=60,DEFAULT_TYRE_SECONDS=30;
@@ -92,7 +97,7 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
         int upgraded=mask;if(version<2)upgraded|=ADDED_IN_V2;if(version<3)upgraded|=ADDED_IN_V3;if(version<4)upgraded|=ADDED_IN_V4;
         if(version<5)holdSeconds=DEFAULT_HOLD_SECONDS;
         if(version<6)upgraded&=~LAMP;
-        if(version<7)upgraded&=~(BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS);
+        if(version<7)upgraded&=~(BMS|VOLTAGE_FROM_BMS|POWER_FROM_BMS|TYRES_LEFT|POWER_KW|POWER_KW_ALWAYS);
         return new WidgetSettings(upgraded,tyreSeconds,voltageMs,musicHideSeconds,chartSeconds,holdPowerMin,holdSpeedMax,speedMs,powerMs,holdPowerMax,holdSeconds,speedChartSeconds,powerChartSeconds,order,conditions);
     }
     public boolean enabled(int widget){return (mask&widget)!=0;}
@@ -124,13 +129,15 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
     public static int index(int widget){for(int i=0;i<CONDITIONAL.length;i++)if(CONDITIONAL[i]==widget)return i;return -1;}
     /**
      * Unknown and repeated entries are dropped, cards missing from the list join the right column in default order, exactly one divider
-     * remains, and the notification block is kept in the right column (at its bottom when it had strayed left).
+     * remains, and the notification block is kept in the right column (at its bottom when it had strayed left). Legacy phone and tyre
+     * entries become the shared row at the first of their places.
      */
     public static List<Integer> normalizeOrder(List<Integer> value){
         ArrayList<Integer> right=new ArrayList<>(),left=new ArrayList<>();boolean divided=false;
         if(value!=null)for(Integer w:value){
             if(w==null)continue;
             if(w==COLUMN_DIVIDER){divided=true;continue;}
+            if(w==PHONE||w==TYRES)w=PHONE_TYRES;
             if(!CARDS.contains(w)||right.contains(w)||left.contains(w))continue;
             (divided?left:right).add(w);
         }
@@ -165,6 +172,8 @@ public record WidgetSettings(int mask,int tyreIntervalSeconds,int voltageInterva
     public boolean readsSpeed(){return enabled(SPEED)||enabled(HILL_HOLD_DODGE)||conditionsUse(WidgetCondition.SPEED);}
     /** With the BMS as the power source the vehicle register is only read for hill hold, which never takes the board's value. */
     public boolean readsPower(){return enabled(HILL_HOLD_DODGE)||!enabled(POWER_FROM_BMS)&&(enabled(POWER)||conditionsUse(WidgetCondition.POWER));}
+    /** Power card unit: PowerFormat.WATTS, KW_ABOVE (1000 W and up) or KW_ALWAYS; the always bit wins. */
+    public int powerFormat(){return enabled(POWER_KW_ALWAYS)?PowerFormat.KW_ALWAYS:enabled(POWER_KW)?PowerFormat.KW_ABOVE:PowerFormat.WATTS;}
     public long tyreLimitMs(){return tyreIntervalSeconds*1000L*TYRE_EXPIRY_FACTOR;}
     public long voltageLimitMs(){return (long)voltageIntervalMs*VOLTAGE_EXPIRY_FACTOR;}
     public long speedLimitMs(){return (long)speedIntervalMs*VOLTAGE_EXPIRY_FACTOR;}

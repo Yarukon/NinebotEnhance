@@ -45,7 +45,12 @@ public final class AboutDialog {
         naviTest.setChecked(frames.naviTest()); naviTest.setMinHeight(MirrorUi.dp(activity, 48));
         naviTest.setVisibility(frames.debugModeUnlocked() ? View.VISIBLE : View.GONE); content.addView(naviTest, debugParams);
         naviTest.setOnCheckedChangeListener((button, checked) -> frames.saveNaviTest(checked));
-        version.setOnClickListener(v -> { if (frames.debugVersionTap()) { debug.setVisibility(View.VISIBLE); probeRow.setVisibility(View.VISIBLE); naviTest.setVisibility(View.VISIBLE); } });
+        CheckBox renderTest = new CheckBox(activity); renderTest.setText("测试渲染"); renderTest.setTextSize(15); renderTest.setTextColor(theme.text);
+        renderTest.setButtonTintList(new ColorStateList(new int[][]{{android.R.attr.state_checked}, {}}, new int[]{theme.accent, theme.secondary}));
+        renderTest.setChecked(frames.renderTest()); renderTest.setMinHeight(MirrorUi.dp(activity, 48));
+        renderTest.setVisibility(frames.debugModeUnlocked() ? View.VISIBLE : View.GONE); content.addView(renderTest, debugParams);
+        renderTest.setOnCheckedChangeListener((button, checked) -> frames.saveRenderTest(checked));
+        version.setOnClickListener(v -> { if (frames.debugVersionTap()) { debug.setVisibility(View.VISIBLE); probeRow.setVisibility(View.VISIBLE); naviTest.setVisibility(View.VISIBLE); renderTest.setVisibility(View.VISIBLE); } });
         content.addView(DialogContent.text(activity, theme, "为九号出行添加应用投屏、系统录屏、虚拟屏预览与输入、会话统计。", 15));
         TextView repository = DialogContent.text(activity, theme, OpenSourceNotice.REPOSITORY, 13); repository.setTextColor(theme.accent);
         repository.setOnClickListener(v -> {

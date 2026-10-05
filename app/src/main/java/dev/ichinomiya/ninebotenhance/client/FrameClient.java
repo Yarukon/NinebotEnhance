@@ -84,6 +84,7 @@ public final class FrameClient {
     private volatile java.util.function.Consumer<String> naviTestPulse = vehicle -> {};
     private volatile Runnable naviTestStop = () -> {};
     private volatile boolean naviTest;
+    private volatile boolean renderTest;
     /** Live turn-by-turn state relayed from a phone navigation app through the module service; polled once a second during a session. */
     private volatile java.util.function.BiConsumer<String, NaviUpdate> naviLivePulse = (vehicle, update) -> {};
     private volatile boolean naviLive = true;
@@ -265,6 +266,7 @@ public final class FrameClient {
                 encoderOverride=new EncoderOverride(saved.getInt("encoder_bitrate_kbps",0),saved.getInt("encoder_fps",0),saved.getBoolean("preview_stats",false),saved.getInt("encoder_frame_width",0),saved.getInt("encoder_frame_height",0));
                 hiddenFeatures=new HiddenFeatures(saved.getBoolean("unhide_throttle",false),saved.getBoolean("unhide_hardkey",false),saved.getBoolean("unhide_cruise",false));
                 naviTest=false;
+                renderTest=false;
                 naviLive=saved.getBoolean("navi_live",true);
                 bmsLayout=BmsCard.parse(saved.getString("bms_layout",""));hud.setBmsLayout(bmsLayout);
                 dashboardDark=saved.getBoolean("dashboard_dark",true);hud.setDark(dashboardDark);
@@ -310,6 +312,7 @@ public final class FrameClient {
     public void setVehicleReader(java.util.function.BiConsumer<String, WidgetSettings> pulse, Runnable stop, java.util.function.Supplier<String> summary) { vehiclePulse = pulse; vehicleStop = stop; vehicleReadSummary = summary; }
     public void setNaviTest(java.util.function.Consumer<String> pulse, Runnable stop) { naviTestPulse = pulse; naviTestStop = stop; }
     public boolean naviTest(){return naviTest;}
+    public boolean renderTest(){return renderTest;}
     /** The BMS card layout lives with the other host-side widget settings. */
     private volatile BmsCard.Layout bmsLayout=BmsCard.DEFAULT;
     public BmsCard.Layout bmsLayout(){return bmsLayout;}
@@ -331,6 +334,10 @@ public final class FrameClient {
     public void saveNaviTest(boolean value){
         naviTest=value;
         report("NAVITEST switch "+(value?"on":"off"));
+    }
+    public void saveRenderTest(boolean value){
+        renderTest=value;
+        report("RENDERTEST switch "+(value?"on":"off"));
     }
     /** The one-time open-source sentence lives with the other host-side settings, so it is asked once per Ninebot install. */
     public boolean noticeAccepted(){return context!=null&&context.getSharedPreferences(Protocol.MODULE+".widgets",Context.MODE_PRIVATE).getBoolean(dev.ichinomiya.ninebotenhance.core.OpenSourceNotice.KEY,false);}
@@ -889,9 +896,10 @@ public final class FrameClient {
     public Bitmap replacement(int width, int height, int density, boolean early) {
         synchronized (frameLock) {
             if (!casting || !ready() || width <= 0 || height <= 0 || (long)width * height > 4096L * 2160) return null;
+            FrameStamp current = stamp();
             Bitmap output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888); output.setDensity(density);
             if (!draw(new Canvas(output), width, height)) { output.recycle(); return null; }
-            supplied.put(output, stamp()); if (early) earlyFrames++;
+            supplied.put(output, current); if (early) earlyFrames++;
             return output; // Encoder owns this object; never recycle or overwrite it from the producer.
         }
     }

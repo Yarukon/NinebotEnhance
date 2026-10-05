@@ -30,13 +30,14 @@ public final class PhoneStatus {
         b.putBoolean("phone_permission",granted);
         // Without Wi-Fi the HUD shows the mobile generation in the same slot; it needs the phone-state grant like the signal bars.
         b.putString("network",!b.getBoolean("wifi")&&cellular&&granted?generation():"");
-        ArrayList<Integer> slots=new ArrayList<>(),levels=new ArrayList<>();
+        ArrayList<Integer> slots=new ArrayList<>(),levels=new ArrayList<>();int dataSlot=-1;
         if(granted)try{
             SubscriptionManager sm=context.getSystemService(SubscriptionManager.class);TelephonyManager tm=context.getSystemService(TelephonyManager.class);
             List<SubscriptionInfo> subscriptions=sm==null?null:sm.getActiveSubscriptionInfoList();
-            if(subscriptions!=null&&tm!=null){subscriptions=new ArrayList<>(subscriptions);subscriptions.sort(Comparator.comparingInt(SubscriptionInfo::getSimSlotIndex));for(SubscriptionInfo info:subscriptions){if(slots.size()==2)break;if(info.getSimSlotIndex()<0)continue;int level=-1;try{SignalStrength strength=tm.createForSubscriptionId(info.getSubscriptionId()).getSignalStrength();if(strength!=null)level=strength.getLevel();}catch(RuntimeException ignored){}slots.add(info.getSimSlotIndex()+1);levels.add(level);}}
+            int dataSubscription=SubscriptionManager.getDefaultDataSubscriptionId();
+            if(subscriptions!=null&&tm!=null){subscriptions=new ArrayList<>(subscriptions);subscriptions.sort(Comparator.comparingInt(SubscriptionInfo::getSimSlotIndex));for(SubscriptionInfo info:subscriptions){if(slots.size()==2)break;if(info.getSimSlotIndex()<0)continue;int level=-1;try{SignalStrength strength=tm.createForSubscriptionId(info.getSubscriptionId()).getSignalStrength();if(strength!=null)level=strength.getLevel();}catch(RuntimeException ignored){}int slot=info.getSimSlotIndex()+1;slots.add(slot);levels.add(level);if(info.getSubscriptionId()==dataSubscription)dataSlot=slot;}}
         }catch(RuntimeException ignored){b.putBoolean("phone_permission",false);}
-        b.putIntegerArrayList("slots",slots);b.putIntegerArrayList("levels",levels);return b;
+        b.putIntegerArrayList("slots",slots);b.putIntegerArrayList("levels",levels);b.putInt("data_slot",dataSlot);return b;
     }
     /** Generation of the default data SIM: 5G (including NSA via the display-info override), 4G, 3G or 2G; empty when unknown. */
     private String generation(){
