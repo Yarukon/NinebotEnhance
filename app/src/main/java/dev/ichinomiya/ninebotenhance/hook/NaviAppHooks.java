@@ -2,14 +2,19 @@ package dev.ichinomiya.ninebotenhance.hook;
 
 import android.app.Application;
 import android.content.Context;
+import android.content.res.Configuration;
+import android.content.res.Resources;
+import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.Display;
 import dev.ichinomiya.ninebotenhance.core.AmapNavi;
 import dev.ichinomiya.ninebotenhance.core.EventCensus;
 import dev.ichinomiya.ninebotenhance.core.NaviDestination;
 import dev.ichinomiya.ninebotenhance.core.NaviUpdate;
+import dev.ichinomiya.ninebotenhance.ipc.Protocol;
 import dev.ichinomiya.ninebotenhance.navi.NaviAppClient;
 import dev.ichinomiya.ninebotenhance.navi.NaviApps;
 import io.github.libxposed.api.XposedModule;
@@ -18,8 +23,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Observe-only probes inside the navigation apps, one process at a time; nothing in the apps is changed and nothing is sent
- * to the vehicle from here. Each app exposes its turn-by-turn data at a stable, non-obfuscated seam:
+ * Observe-only probes inside the navigation apps, one process at a time; nothing in the apps is changed (except Baidu's
+ * status_bar_height on the virtual display, see hookStatusBarHeight) and nothing is sent to the vehicle from here. Each app exposes its turn-by-turn data at a stable, non-obfuscated seam:
  * <ul>
  * <li>AMap: the native guidance engine broadcasts JSON events to every registered {@code NaviEventReceiver}. The module
  * instantiates AMap's own no-argument receiver class ({@code HiCarXbusEmitter$a}), registers it with {@code NaviManager} and
@@ -57,6 +62,10 @@ public final class NaviAppHooks {
     private volatile int scene;
     private volatile long lastCensus;
     private final boolean mainProcess;
+    /** Baidu's home page reserves the phone's status_bar_height (a px value) above its search box; on the bar-less virtual display it is shrunk to this. */
+    public static final int BAIDU_VIRTUAL_TOP_PX=8;
+    /** The module's display as {widthDp, heightDp, densityDpi}, refreshed by a display listener; null while it does not exist. */
+    private volatile int[] virtualDisplay;
     public NaviAppHooks(XposedModule module,String pkg,String process){this.module=module;this.pkg=pkg;client=new NaviAppClient(process==null?pkg:process);mainProcess=process==null||process.equals(pkg);}
     public String label(){return NaviApps.label(pkg);}
     public void install(ClassLoader loader){
@@ -70,7 +79,7 @@ public final class NaviAppHooks {
                 try{
                     Context context=(Context)chain.getArg(0);
                     if(pkg.equals(context.getPackageName())){
-                        client.attach(context);loaders.add(context.getClassLoader());
+                        client.attach(context);loaders.add(context.getClassLoader());if(pkg.equals(NaviApps.BAIDU))watchDisplays(context);
                         client.report("NAVI attached "+label()+" process="+client.process());
                         main.post(this::seedScan);
                     }
@@ -78,6 +87,7 @@ public final class NaviAppHooks {
                 return result;
             });
         }catch(Throwable e){client.report("NAVI attach hook unavailable "+e.getClass().getSimpleName());}
+        if(pkg.equals(NaviApps.BAIDU))hookStatusBarHeight();
         try{
             module.hook(ClassLoader.class.getDeclaredMethod("loadClass",String.class,boolean.class)).intercept(chain->{
                 Object result=chain.proceed();
@@ -85,6 +95,43 @@ public final class NaviAppHooks {
                 return result;
             });
         }catch(Throwable e){client.report("NAVI class observer unavailable "+e.getClass().getSimpleName());}
+    }
+    /** The one behaviour change in a navigation app: on the module's virtual display Baidu reads a near-zero status bar height. */
+    private void hookStatusBarHeight(){
+        int id=Resources.getSystem().getIdentifier("status_bar_height","dimen","android");if(id==0){client.report("NAVI baidu status_bar_height id missing");return;}
+        for(String name:new String[]{"getDimensionPixelSize","getDimensionPixelOffset","getDimension"})try{
+            Method method=Resources.class.getDeclaredMethod(name,int.class);boolean asFloat=method.getReturnType()==float.class;
+            module.hook(method).intercept(chain->{
+                Object result=chain.proceed();
+                if((int)chain.getArg(0)!=id||!onVirtualDisplay((Resources)chain.getThisObject()))return result;
+                if(logged.add("statusbar "+name))client.report("NAVI baidu "+name+"(status_bar_height) "+result+" -> "+BAIDU_VIRTUAL_TOP_PX+" on the virtual display");
+                return asFloat?(Object)(float)BAIDU_VIRTUAL_TOP_PX:(Object)BAIDU_VIRTUAL_TOP_PX;
+            });
+        }catch(Throwable e){client.report("NAVI baidu "+name+" hook unavailable "+e.getClass().getSimpleName());}
+    }
+    /** Resources carry their display's configuration: they belong to the module's display when dp size and density are its own. */
+    private boolean onVirtualDisplay(Resources resources){
+        int[] display=virtualDisplay;if(display==null||resources==null)return false;
+        Configuration config=resources.getConfiguration();
+        return config.densityDpi==display[2]&&Math.abs(config.screenWidthDp-display[0])<=1&&Math.abs(config.screenHeightDp-display[1])<=1;
+    }
+    private void watchDisplays(Context context){
+        DisplayManager displays=context.getSystemService(DisplayManager.class);if(displays==null)return;
+        Runnable refresh=()->{
+            int[] found=null;
+            for(Display display:displays.getDisplays()){
+                if(!Protocol.DISPLAY_NAME.equals(display.getName()))continue;
+                android.util.DisplayMetrics metrics=new android.util.DisplayMetrics();display.getRealMetrics(metrics);float scale=metrics.densityDpi/160f;
+                found=new int[]{Math.round(metrics.widthPixels/scale),Math.round(metrics.heightPixels/scale),metrics.densityDpi};
+            }
+            virtualDisplay=found;
+        };
+        refresh.run();
+        displays.registerDisplayListener(new DisplayManager.DisplayListener(){
+            @Override public void onDisplayAdded(int id){refresh.run();}
+            @Override public void onDisplayRemoved(int id){refresh.run();}
+            @Override public void onDisplayChanged(int id){refresh.run();}
+        },main);
     }
     public void ready(ClassLoader loader){if(!mainProcess)return;if(loader!=null)loaders.add(loader);main.post(this::seedScan);}
     private String[] seeds(){

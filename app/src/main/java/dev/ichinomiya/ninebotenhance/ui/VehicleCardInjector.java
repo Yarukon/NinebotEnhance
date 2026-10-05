@@ -275,11 +275,11 @@ public final class VehicleCardInjector {
     /** The 测试渲染 button beside the ownership line, installed lazily on first use while frames.renderTest() is on and the label matches. */
     private void renderTestEntry(TextView label, boolean match) {
         if (!match || !frames.renderTest()) {
-            Button existing = findRenderButton(label);
+            View existing = findRenderButton(label);
             if (existing != null) existing.setVisibility(View.GONE);
             return;
         }
-        Button button = findRenderButton(label);
+        View button = findRenderButton(label);
         if (button == null) {
             if (renderTestFailed.containsKey(label)) return;
             button = installRenderButton(label);
@@ -288,17 +288,17 @@ public final class VehicleCardInjector {
         button.setVisibility(View.VISIBLE);
     }
     /** The already-installed render-test button among the label's siblings, if any; avoids keeping a label -> button map alive. */
-    private static Button findRenderButton(TextView label) {
+    private static View findRenderButton(TextView label) {
         ViewParent parent = label.getParent();
         if (!(parent instanceof ViewGroup)) return null;
         ViewGroup group = (ViewGroup)parent;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
-            if (RENDER_MARKER.equals(child.getTag()) && child instanceof Button) return (Button)child;
+            if (RENDER_MARKER.equals(child.getTag())) return child;
         }
         return null;
     }
-    private Button installRenderButton(TextView label) {
+    private View installRenderButton(TextView label) {
         if (!(label.getParent() instanceof ViewGroup)) return null;
         ViewGroup parent = (ViewGroup)label.getParent();
         Activity activity = activity(label.getContext());
@@ -306,31 +306,38 @@ public final class VehicleCardInjector {
         MirrorUi theme = new MirrorUi(activity, label);
         int fill = theme.dark ? NINEBOT_FILL_DARK : NINEBOT_FILL_LIGHT;
         Button button = button(theme, label.getContext(), fill);
-        button.setText("测试渲染"); button.setTag(RENDER_MARKER);
+        button.setText("测试渲染");
         button.setAutoSizeTextTypeWithDefaults(TextView.AUTO_SIZE_TEXT_TYPE_NONE);
+        Button display = button(theme, label.getContext(), fill);
+        display.setText("虚拟屏"); display.setAutoSizeTextTypeWithDefaults(TextView.AUTO_SIZE_TEXT_TYPE_NONE);
+        display.setOnClickListener(v -> { Activity target = activity(v.getContext()); if (target != null && !target.isFinishing()) controller.clickDisplay(target, v); });
+        LinearLayout holder = new LinearLayout(label.getContext()); holder.setOrientation(LinearLayout.HORIZONTAL); holder.setTag(RENDER_MARKER);
+        holder.addView(button, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams displayParams = new LinearLayout.LayoutParams(-2, -2); displayParams.setMarginStart(dp(label, 8));
+        holder.addView(display, displayParams);
         button.setOnClickListener(v -> {
             Activity target = activity(v.getContext());
             if (target == null || target.isFinishing()) return;
-            View reference = v.getParent() instanceof View ? (View)v.getParent() : v;
+            View reference = parent;
             try { RenderTestDialog.show(target, frames, reference); }
             catch (RuntimeException e) { ErrorDialog.show(target, v, "测试渲染打开失败\n" + Ipc.error(e)); }
         });
         if (parent.getClass().getName().equals("androidx.constraintlayout.widget.ConstraintLayout")) {
-            if (!installRenderConstraint(parent, label, button)) return null;
+            if (!installRenderConstraint(parent, label, holder)) return null;
         } else if (parent instanceof LinearLayout) {
             LinearLayout row = (LinearLayout)parent;
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
             if (row.getOrientation() == LinearLayout.VERTICAL) params.topMargin = dp(label, 8);
             else { params.setMarginStart(dp(label, 8)); params.gravity = Gravity.CENTER_VERTICAL; }
-            parent.addView(button, parent.indexOfChild(label) + 1, params);
+            parent.addView(holder, parent.indexOfChild(label) + 1, params);
         } else {
             frames.report("DIRECT UI render-test button unsupported parent " + parent.getClass().getName());
             return null;
         }
-        return button;
+        return holder;
     }
     /** Placed to the label's end, vertically centered on it, following installInside's reflection pattern. */
-    private boolean installRenderConstraint(ViewGroup parent, TextView label, Button button) {
+    private boolean installRenderConstraint(ViewGroup parent, TextView label, View button) {
         try {
             if (label.getId() == View.NO_ID) label.setId(View.generateViewId());
             Class<?> params = label.getLayoutParams().getClass();
